@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="LATCH: action-guided perceptual memory for vision-language-action models. Read and write gates learned from the action objective alone.">
+  <title>LATCH: Action-Guided Perceptual Memory for VLA Models</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23127a86'/%3E%3Ctext x='16' y='23' font-family='Arial' font-weight='700' font-size='19' fill='white' text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="hero wrap">
+  <h1><span class="name">LATCH</span>: Action-Guided Perceptual Memory<br>for Vision-Language-Action Models</h1>
+  <p class="venue">Under review</p>
+  <p class="authors">Anonymous Authors</p>
+
+  <div class="links">
+    <span class="btn soon" title="Available after review">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2h9l5 5v15a0 0 0 0 1 0 0H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V8h4.5L14 3.5zM8 12h8v1.6H8V12zm0 3.4h8V17H8v-1.6zm0-6.8h4v1.6H8V8.6z"/></svg>
+      Paper <small>(soon)</small>
+    </span>
+    <span class="btn soon" title="Available after review">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 16.6 4 12l4.6-4.6L7.2 6 1.2 12l6 6 1.4-1.4zm6.8 0L20 12l-4.6-4.6L16.8 6l6 6-6 6-1.4-1.4z"/></svg>
+      Code <small>(soon)</small>
+    </span>
+    <a class="btn" href="#real">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+      Videos
+    </a>
+  </div>
+
+  <div class="banner" id="banner" title="Click to pause / play">
+    <div class="b-left">
+      <video src="assets/videos/swap_latch_1.mp4" poster="assets/videos/swap_latch_1.jpg" muted loop playsinline preload="auto"></video>
+      <div class="b-cap"><span class="b-tag">Current action</span><span class="phase"></span></div>
+    </div>
+    <div class="b-arrow" aria-hidden="true">
+      <svg viewBox="0 0 60 24"><path d="M2 12h48" /><path d="M42 4l10 8-10 8" /></svg>
+      <small>action queries</small>
+    </div>
+    <div class="b-right">
+      <div class="b-head">Perceptual memory <span>32 frames, uniform over the episode so far</span></div>
+      <div class="mem"></div>
+      <div class="b-legend">
+        <span><i class="lg-read"></i>read gate (measured): where the action looks</span>
+        <span><i class="lg-write"></i>write gate (measured): how loudly a frame speaks</span>
+      </div>
+      <div class="ptime"></div>
+    </div>
+  </div>
+  <p class="b-note"><b>Which past frames does the policy weight?</b> A real LATCH rollout on the SO-101 arm (“Swap the
+    positions of two cubes, starting with the red one”), replayed through the released checkpoint with the robot's serving
+    protocol (its actions match the recorded commands to a median of 0.12°). Each tile is a frame in the policy's 32-frame
+    memory at the latest policy call; glow = <b>measured read-gate bias</b>, brightness and bar = <b>measured write-gate
+    scale</b>, both averaged over the 18 action-expert blocks and 10 denoising steps and shown relative within each call
+    (the absolute differences are small; ranges below the grid). Both gates rank the manipulation moments highest and the
+    first and idle frames lowest.</p>
+  <div class="tldr">
+    <b class="tag">TL;DR</b>LATCH gives a VLA policy a memory of past frames and learns, from the action loss alone,
+    <i>where</i> to look in that history and <i>how much</i> each frame should count. It needs no keyframe or subtask
+    labels and no separate memory policy.
+  </div>
+
+</header>
+
+<main class="wrap">
+
+  <figure class="hero-fig">
+    <img src="assets/img/compare.jpg" alt="Swap Cubes on the SO-101 arm: HAMLET puts the red cube back and moves it back again; LATCH moves it aside and finishes the swap." loading="lazy">
+    <figcaption><b>Real-world rollout on the SO-101 arm.</b> HAMLET puts the red cube back and loses track after the first
+      pick-up; LATCH moves it aside and finishes the swap.</figcaption>
+  </figure>
+
+  <!-- Abstract -->
+  <section class="card" id="abstract">
+    <h2>Abstract</h2>
+    <div class="prose">
+      <p>Non-Markovian manipulation requires a vision-language-action (VLA) policy to know which past observations still
+        matter for the action being produced. Most VLAs act from the current observation or a short visual window.
+        Existing memory systems either add symbolic task state through a separate high-level policy trained on subtask
+        or keyframe annotation, or keep perceptual history with no task-general way to prioritize the useful parts.</p>
+      <p>We introduce <span class="hl">LATCH</span>, which learns this priority inside the policy. Two lightweight
+        gates, a <b>read gate</b> and a <b>write gate</b>, control where the action queries attend within a uniformly
+        sampled visual history and how strongly each frame contributes. Both are trained jointly with the VLA action
+        objective, which is the only supervision: no annotation pipeline, no retrieval policy, and a single
+        differentiable policy at inference.</p>
+      <p>We evaluate LATCH on the π<sub>0.5</sub> and GR00T N1.6 backbones across RoboMME's 16 memory-centric tasks,
+        the LIBERO suites, dual-arm RMBench, and real-world memory tasks on an SO-101 arm. On RoboMME, LATCH lifts
+        π<sub>0.5</sub> from 18.8% to <b>47.2%</b> average success, the highest of all evaluated memory methods for VLAs.</p>
+    </div>
+  </section>
+
+  <!-- Method -->
+  <section class="card" id="method">
+    <h2>Method</h2>
+    <div class="prose">
+      <p>The policy keeps a bounded <b>perceptual memory</b>: <i>N</i> = 32 frames sampled uniformly in time from the
+        episode so far, each encoded by the frozen vision encoder into <i>P</i> tokens. In every block of the action
+        expert, the action tokens cross-attend to this memory, and the readout modulates the block (feature-wise scale
+        and shift). Without LATCH, nothing in this readout marks one moment of the history as more relevant than another.
+        LATCH turns the two implicit constants of that readout into learned, per-frame functions.</p>
+    </div>
+
+    <figure class="fig">
+      <img src="assets/img/arch.jpg" alt="LATCH architecture: uniformly sampled observation history is encoded into a perceptual memory; a gated memory readout with a read gate on the attention logits and a write gate on the values modulates the action expert, trained by the action loss only." loading="lazy">
+      <figcaption>LATCH overview. The gates sit inside the memory cross-attention of the action expert and are trained
+        through the action loss only.</figcaption>
+    </figure>
+
+    <div class="prose">
+      <div class="gates">
+        <div class="gate">
+          <h4>Read gate: where to look</h4>
+          <p>A small MLP sees the frame summary and the current action state and adds one bias per frame to the
+            attention logits: <code>softmax(QKᵀ/√d + b)</code>. Because it depends on the action state, it is
+            <i>query-aware</i>: the same frame can matter more or less as the episode unfolds.</p>
+        </div>
+        <div class="gate">
+          <h4>Write gate: how loudly a frame speaks</h4>
+          <p>A second MLP sees only the frame and scales its values after normalization:
+            <code>V′ = g·V</code>, <code>g = 2σ(z) ∈ [0, 2]</code>. It is <i>query-blind</i>, so frame content
+            alone sets its weight. Placed after RMSNorm, the scale is not normalized away.</p>
+        </div>
+      </div>
+      <p>Both gate output layers are <b>zero-initialized</b> (<i>b</i> = 0, <i>g</i> = 1), so the gated policy starts exactly
+        as the ungated memory policy and departs from equal weighting only where the action objective asks for it.
+        Training has two phases with the same loss: first the memory-conditioned policy, then the gates attached and the
+        whole policy fine-tuned end to end. At inference, the gates cost two small MLP evaluations per frame.</p>
+      <div class="pills">
+        <span class="pill">No keyframe / subtask labels</span>
+        <span class="pill">No auxiliary loss</span>
+        <span class="pill">No retrieval policy at inference</span>
+        <span class="pill">Works on π<sub>0.5</sub> and GR00T N1.6</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Research questions -->
+  <section class="card" id="rq">
+    <h2>Research Questions</h2>
+    <div class="prose">
+      <p>Our experiments ask whether action-guided perceptual memory is a general mechanism rather than a benchmark-specific
+        one. We compare LATCH with matched perceptual memories and with annotation-trained hybrids on the primary memory
+        benchmark, then test it on a second VLA architecture, a dual-arm memory benchmark, regular tasks on which memory must
+        not cost anything, and a real robot, and isolate its design choices with a controlled ablation.</p>
+    </div>
+    <div class="rq-tools"><button type="button" id="rqToggle">Expand all</button></div>
+    <ol class="rqs">
+      <li><details><summary><span class="q">How does LATCH compare with perceptual memory methods?</span></summary><div class="ans">
+        <p><b>It is the strongest perceptual memory on both backbones.</b> On RoboMME it reaches 47.2% on π<sub>0.5</sub>
+          against 45.7% for the schedule-matched uniform memory MME-VLA and 26.5% for HAMLET, and 23.6% on GR00T N1.6
+          against 21.5% and 16.2%. Its gains over the uniform memory are spread over the families, largest on Reference and Counting.</p>
+        <a class="ev" href="#t-robomme">RoboMME table →</a>
+        </div></details></li>
+      <li><details><summary><span class="q">How does LATCH compare with hybrid memory methods that require additional manual annotation?</span></summary><div class="ans">
+        <p><b>Without any annotation it is ahead on average on RoboMME and level overall on RMBench.</b> LATCH 47.2% vs
+          MemER 42.4%: LATCH leads where the evidence is the robot's own motion, its timing, or a running count; MemER leads
+          where one earlier observation must be recalled as a nameable fact (Permanence, Reference). On RMBench (10 of 100 episodes per task), Mem-0 is
+          ahead on M(1) (55.3 vs 50.7), level on M(n) (15.8 vs 18.3), and within a seed spread overall (37.8 vs 36.3).</p>
+        <a class="ev" href="#t-robomme">RoboMME table →</a> <a class="ev" href="#t-rmbench">RMBench table →</a>
+        </div></details></li>
+      <li><details><summary><span class="q">Does LATCH use its memory reliably, or can the memory confuse the policy?</span></summary><div class="ans">
+        <p><b>It uses memory as evidence of task progress.</b> Counting is the probe, since the count exists only in memory.
+          LATCH leads the Counting family on both backbones (69.8% and 38.0%), keeps an exact count on the real arm in 13 of
+          25 trials against 8 for the uniform memory reading the same 32 frames, and its misses are late overshoots rather
+          than lost counts. On LIBERO, where naive history is known to hurt, it costs nothing.</p>
+        <a class="ev" href="#t-count">Pick-up-N trials →</a> <a class="ev" href="#t-libero">LIBERO table →</a>
+        </div></details></li>
+      <li><details><summary><span class="q">Does LATCH generalize across backbones?</span></summary><div class="ans">
+        <p><b>Yes.</b> On GR00T N1.6, with no change beyond the backbone's own recipe, the ordering is reproduced: LATCH
+          ahead of MME-VLA, HAMLET, and the memory-free backbone, with its margin again in Counting and Reference. The
+          absolute level is lower on this backbone, and each arm is one training run.</p>
+        <a class="ev" href="#t-robomme">RoboMME table →</a>
+        </div></details></li>
+      <li><details><summary><span class="q">Does LATCH transfer across embodiments, datasets, and the real world?</span></summary><div class="ans">
+        <p><b>Yes.</b> On dual-arm RMBench (reduced 10-episode protocol) it is the best perceptual memory (36.3% vs 25.6% for MME-VLA and 10.4% for
+          π<sub>0.5</sub>), with its gain in the M(1) tasks; the M(n) tasks remain open for every method. On the SO-101 arm
+          it solves the two ordering tasks in 8 and 10 of 10 trials and holds the count more often than any baseline.</p>
+        <a class="ev" href="#t-rmbench">RMBench table →</a> <a class="ev" href="#real">Real-robot rollouts →</a>
+        </div></details></li>
+      <li><details><summary><span class="q">Does LATCH affect regular tasks?</span></summary><div class="ans">
+        <p><b>No.</b> LIBERO is largely Markovian and near saturation. LATCH stays within about the seed variance of its
+          backbone (97.0% vs 97.1% on π<sub>0.5</sub>, 95.6% vs 96.8% on GR00T N1.6), where naive frame stacking is reported
+          to lose several points, so the memory can stay switched on.</p>
+        <a class="ev" href="#t-libero">LIBERO table →</a>
+        </div></details></li>
+      <li><details><summary><span class="q">Do the gates work? Which design choices matter, and at what cost?</span></summary><div class="ans">
+        <p><b>Yes, the gates rank the frames the policy needs.</b> Keeping only the third of the memory frames the trained
+          gates rank highest retains 38.1% success against 32.2% for the lowest-ranked third (same number of frames), higher
+          in every task family. Trained one at a time, the two gates specialize: the query-blind write gate is stronger on
+          Permanence and on tasks where one stored moment carries the state, the query-aware read gate on Imitation and on
+          tasks where the relevant frame changes as the episode unfolds; together they exceed both in Counting. At ten
+          episodes per task these per-gate differences are of the order of the seed spread, so they are tendencies.</p>
+        <p><b>Design choices:</b> the warm start from the uniform-memory policy is the largest factor (more than 20 points),
+          and the memory budget follows an inverted U peaking at 32 frames.
+          <b>Cost:</b> at inference LATCH is a single policy with no retrieval step and no second model; the memory adds
+          about 22 ms per call over the memory-free policy and the gates about 8 ms over the uniform memory (training
+          throughput −4%).</p>
+        <details class="abl" id="ablation"><summary>Show ablation table</summary>
+          <div class="tbl-wrap">
+            <table>
+              <caption>Ablations on the eight-task RoboMME subset: success rate (%)</caption>
+              <thead><tr><th>Variant</th><th>Count.</th><th>Perm.</th><th>Ref.</th><th>Imit.</th><th>Overall</th></tr></thead>
+              <tbody>
+              <tr class="group"><td colspan="6">Gates, trained from the warm start</td></tr>
+              <tr><td class="sub">Write gate only</td><td>50.0</td><td class="best">41.7</td><td>35.0</td><td>74.6</td><td>50.3<span class="sd"> ± 4.0</span></td></tr>
+              <tr><td class="sub">Read gate only</td><td class="best">51.7</td><td>36.7</td><td class="best">36.7</td><td class="best">80.0</td><td class="best">51.2<span class="sd"> ± 1.2</span></td></tr>
+              <tr class="group"><td colspan="6">Frame selection at inference, trained LATCH</td></tr>
+              <tr><td class="sub">Top-ranked third</td><td class="best">36.7</td><td class="best">35.0</td><td class="best">36.7</td><td class="best">43.9</td><td class="best">38.1<span class="sd"> ± 2.8</span></td></tr>
+              <tr><td class="sub">Bottom-ranked third</td><td>28.3</td><td>31.7</td><td>33.3</td><td>35.4</td><td>32.2<span class="sd"> ± 0.8</span></td></tr>
+              <tr class="group"><td colspan="6">Without the warm start (from base π<sub>0.5</sub>)</td></tr>
+              <tr><td class="sub">No gate</td><td>26.7</td><td>35.0</td><td class="best">28.3</td><td>23.3</td><td>28.3<span class="sd"> ± 4.0</span></td></tr>
+              <tr><td class="sub">Write + read gates</td><td class="best">30.0</td><td class="best">46.7</td><td>21.7</td><td class="best">26.7</td><td class="best">31.2<span class="sd"> ± 3.3</span></td></tr>
+              <tr class="group"><td colspan="6">Memory budget, write + read gates</td></tr>
+              <tr><td class="sub">8 frames</td><td>41.7</td><td>35.6</td><td>30.0</td><td>56.7</td><td>41.0<span class="sd"> ± 4.0</span></td></tr>
+              <tr><td class="sub">16 frames</td><td>43.3</td><td>32.0</td><td>28.3</td><td>66.3</td><td>42.5<span class="sd"> ± 1.4</span></td></tr>
+              <tr><td class="sub">32 frames (full model)</td><td class="best">55.0</td><td class="best">40.0</td><td class="best">35.6</td><td class="best">80.0</td><td class="best">52.6<span class="sd"> ± 3.4</span></td></tr>
+              <tr><td class="sub">64 frames</td><td>45.7</td><td>35.0</td><td>31.7</td><td>67.6</td><td>45.0<span class="sd"> ± 1.7</span></td></tr>
+              <tr><td class="sub">128 frames</td><td>45.0</td><td>33.3</td><td>16.7</td><td>56.7</td><td>37.9<span class="sd"> ± 0.7</span></td></tr>
+              <tr class="ours"><td>LATCH (full model, 32 frames)</td><td>55.0</td><td>40.0</td><td>35.6</td><td>80.0</td><td>52.6<span class="sd"> ± 3.4</span></td></tr>
+              </tbody>
+            </table>
+            <p class="tnote">Two tasks per family, the first ten episodes of each, three seeds; ± std on the overall. Each block
+              varies one design choice; the full model in the last row is the reference for every block except frame
+              selection, where the trained LATCH keeps only a third of its memory frames at inference. Bold: best per column
+              within a block; the full-model reference row is shown in bold throughout.</p>
+          </div>
+        </details>
+        <details class="abl" id="t-cost-wrap"><summary>Show speed and inference cost</summary>
+          <div class="cost2">
+            <div class="tbl-wrap" id="t-cost">
+              <table>
+                      <caption>Inference cost on π<sub>0.5</sub></caption>
+                      <thead><tr><th>Policy</th><th>Call (ms)</th><th>Replan (ms)</th></tr></thead>
+                      <tbody>
+                        <tr><td>π<sub>0.5</sub></td><td>46.1</td><td>46.1</td></tr>
+                        <tr><td class="sub">+ MME-VLA</td><td>59.5</td><td>79.2</td></tr>
+                        <tr class="ours"><td class="sub">+ LATCH (ours)</td><td>67.4</td><td>87.8</td></tr>
+                        <tr><td class="sub">+ HAMLET</td><td>78.2</td><td>83.6</td></tr>
+                      </tbody>
+                    </table>
+              <p class="tnote">LIBERO policies, batch size 1 on one GH200: one policy call, and one replan, which is a history push
+        plus a call every 16 control steps. The GPU was shared, so read ratios rather than absolute times. Training
+        throughput (four GH200, batch 64): π<sub>0.5</sub> about 2.2 steps/s, MME-VLA 2.16, LATCH 2.07, HAMLET 0.51.</p>
+            </div>
+            <div class="tbl-wrap" id="t-eff">
+              <table>
+                <caption>LATCH on π<sub>0.5</sub> by memory budget</caption>
+                <thead><tr><th>Frames</th><th>Call (ms)</th><th>GPU (GB)</th></tr></thead>
+                <tbody>
+                <tr><td>0 (no memory)</td><td>42.8</td><td>6.6</td></tr>
+                <tr><td>8</td><td>63.1</td><td>8.4</td></tr>
+                <tr><td>16</td><td>63.7</td><td>8.4</td></tr>
+                <tr class="ours"><td>32</td><td>65.1</td><td>8.4</td></tr>
+                <tr><td>64</td><td>66.8</td><td>8.2</td></tr>
+                </tbody>
+              </table>
+              <p class="tnote">One A100, median of 30 policy calls, batch size 1; shared GPU, so read ratios rather than absolute
+                times. The cost lies in having a memory, not in its size: 8 to 64 frames add under 4 ms and no memory.</p>
+            </div>
+          </div>
+        </details>
+        </div></details></li>
+    </ol>
+  </section>
+
+  <!-- Simulation -->
+  <section class="card" id="results">
+    <h2>Simulated Benchmarks</h2>
+
+    <div class="prose">
+      <p>We evaluate on three simulated benchmarks: <b>RoboMME</b> (16 memory-centric tasks in four families),
+        <b>RMBench</b> (9 dual-arm memory tasks, evaluated on 10 of the 100 official episodes per task), and <b>LIBERO</b> (4 suites of regular, largely Markovian tasks that
+        check whether memory costs anything when it is not needed).</p>
+    </div>
+<!-- BENCH-GALLERY:BEGIN -->
+<div class="bench"><h4>RoboMME <small>16 memory tasks · rollouts of LATCH on GR00T N1.6 (successful episodes)</small></h4>
+<div class="bfam"><span class="bfam-l">Counting</span><div class="bgrid">
+<figure class="btile"><video src="assets/bench/robomme_BinFill.mp4" poster="assets/bench/robomme_BinFill.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>BinFill</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_StopCube.mp4" poster="assets/bench/robomme_StopCube.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>StopCube</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_PickXtimes.mp4" poster="assets/bench/robomme_PickXtimes.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>PickXtimes</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_SwingXtimes.mp4" poster="assets/bench/robomme_SwingXtimes.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>SwingXtimes</b></figcaption></figure>
+</div></div>
+<div class="bfam"><span class="bfam-l">Permanence</span><div class="bgrid">
+<figure class="btile"><video src="assets/bench/robomme_ButtonUnmask.mp4" poster="assets/bench/robomme_ButtonUnmask.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>ButtonUnmask</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_VideoUnmask.mp4" poster="assets/bench/robomme_VideoUnmask.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>VideoUnmask</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_VideoUnmaskSwap.mp4" poster="assets/bench/robomme_VideoUnmaskSwap.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>VideoUnmaskSwap</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_ButtonUnmaskSwap.mp4" poster="assets/bench/robomme_ButtonUnmaskSwap.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>ButtonUnmaskSwap</b></figcaption></figure>
+</div></div>
+<div class="bfam"><span class="bfam-l">Reference</span><div class="bgrid">
+<figure class="btile"><video src="assets/bench/robomme_PickHighlight.mp4" poster="assets/bench/robomme_PickHighlight.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>PickHighlight</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_VideoRepick.mp4" poster="assets/bench/robomme_VideoRepick.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>VideoRepick</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_VideoPlaceButton.mp4" poster="assets/bench/robomme_VideoPlaceButton.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>VideoPlaceButton</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_VideoPlaceOrder.mp4" poster="assets/bench/robomme_VideoPlaceOrder.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>VideoPlaceOrder</b></figcaption></figure>
+</div></div>
+<div class="bfam"><span class="bfam-l">Imitation</span><div class="bgrid">
+<figure class="btile"><video src="assets/bench/robomme_MoveCube.mp4" poster="assets/bench/robomme_MoveCube.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>MoveCube</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_InsertPeg.mp4" poster="assets/bench/robomme_InsertPeg.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>InsertPeg</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_PatternLock.mp4" poster="assets/bench/robomme_PatternLock.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>PatternLock</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/robomme_RouteStick.mp4" poster="assets/bench/robomme_RouteStick.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>RouteStick</b></figcaption></figure>
+</div></div>
+</div>
+<div class="bench"><h4>RMBench <small>9 dual-arm memory tasks · benchmark demonstrations</small></h4>
+<div class="bfam"><span class="bfam-l">M(1)</span><div class="bgrid">
+<figure class="btile"><video src="assets/bench/rmbench_observe_and_pickup.mp4" poster="assets/bench/rmbench_observe_and_pickup.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>observe and pickup</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/rmbench_rearrange_blocks.mp4" poster="assets/bench/rmbench_rearrange_blocks.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>rearrange blocks</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/rmbench_put_back_block.mp4" poster="assets/bench/rmbench_put_back_block.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>put back block</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/rmbench_swap_blocks.mp4" poster="assets/bench/rmbench_swap_blocks.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>swap blocks</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/rmbench_swap_T.mp4" poster="assets/bench/rmbench_swap_T.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>swap T</b></figcaption></figure>
+</div></div>
+<div class="bfam"><span class="bfam-l">M(n)</span><div class="bgrid">
+<figure class="btile"><video src="assets/bench/rmbench_battery_try.mp4" poster="assets/bench/rmbench_battery_try.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>battery try</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/rmbench_blocks_ranking_try.mp4" poster="assets/bench/rmbench_blocks_ranking_try.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>blocks ranking try</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/rmbench_cover_blocks.mp4" poster="assets/bench/rmbench_cover_blocks.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>cover blocks</b></figcaption></figure>
+<figure class="btile"><video src="assets/bench/rmbench_press_button.mp4" poster="assets/bench/rmbench_press_button.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>press button</b></figcaption></figure>
+</div></div>
+</div>
+<div class="bench"><h4>LIBERO <small>4 suites, 40 tasks · benchmark demonstrations, one task per suite</small></h4>
+<div class="bfam"><span class="bfam-l">Suites</span><div class="bgrid">
+<figure class="btile"><video src="assets/bench/libero_spatial.mp4" poster="assets/bench/libero_spatial.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>LIBERO-Spatial</b><span>Pick up the black bowl between the plate and the ramekin and place it on the plate.</span></figcaption></figure>
+<figure class="btile"><video src="assets/bench/libero_object.mp4" poster="assets/bench/libero_object.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>LIBERO-Object</b><span>Pick up the alphabet soup and place it in the basket.</span></figcaption></figure>
+<figure class="btile"><video src="assets/bench/libero_goal.mp4" poster="assets/bench/libero_goal.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>LIBERO-Goal</b><span>Open the middle drawer of the cabinet.</span></figcaption></figure>
+<figure class="btile"><video src="assets/bench/libero_long.mp4" poster="assets/bench/libero_long.jpg" muted loop playsinline preload="none" data-autoplay></video><figcaption><b>LIBERO-Long</b><span>Put both the alphabet soup and the tomato sauce in the basket.</span></figcaption></figure>
+</div></div></div>
+<!-- BENCH-GALLERY:END -->
+
+    <div class="stats">
+      <div class="stat"><div class="v">47.2<small>%</small></div><div class="k">RoboMME, π<sub>0.5</sub> + LATCH<br>(π<sub>0.5</sub> alone: 18.8%)</div></div>
+      <div class="stat"><div class="v">23.6<small>%</small></div><div class="k">RoboMME, GR00T N1.6 + LATCH<br>(GR00T alone: 9.7%)</div></div>
+      <div class="stat"><div class="v">36.3<small>%</small></div><div class="k">RMBench (10-episode protocol), π<sub>0.5</sub> + LATCH<br>(π<sub>0.5</sub> alone: 10.4%)</div></div>
+      <div class="stat"><div class="v">0</div><div class="k">annotations and extra models<br>needed at train or test time</div></div>
+    </div>
+
+    <div class="tbl-wrap" id="t-robomme">
+      <table>
+        <caption>RoboMME: success rate (%) on 16 memory tasks, 50 episodes each</caption>
+        <thead>
+          <tr><th>Method</th><th class="txt">Memory</th><th class="c">Annot.</th><th>Count.</th><th>Perm.</th><th>Ref.</th><th>Imit.</th><th>Overall</th></tr>
+        </thead>
+        <tbody>
+          <tr class="group"><td colspan="8">π<sub>0.5</sub> backbone</td></tr>
+          <tr><td>π<sub>0.5</sub>†</td><td class="txt">none</td><td class="no">✗</td><td>28.8</td><td>17.0</td><td>17.2</td><td>8.8</td><td>17.9</td></tr>
+          <tr><td class="sub">+ action history†</td><td class="txt">actions</td><td class="no">✗</td><td>29.1</td><td>22.8</td><td>15.9</td><td>11.2</td><td>19.7</td></tr>
+          <tr><td class="sub">π<sub>0.5</sub>∗</td><td class="txt">none</td><td class="no">✗</td><td>28.8</td><td>19.3</td><td>16.2</td><td>10.8</td><td>18.8<span class="sd"> ± 0.6</span></td></tr>
+          <tr><td class="sub">HAMLET∗</td><td class="txt">moment tokens</td><td class="no">✗</td><td>35.2</td><td>25.0</td><td>24.8</td><td>21.2</td><td>26.5<span class="sd"> ± 1.1</span></td></tr>
+          <tr><td class="sub">MemER†</td><td class="txt">keyframes + subtasks</td><td class="yes">✓</td><td>48.8</td><td class="best">53.2</td><td class="best">38.0</td><td>29.5</td><td>42.4</td></tr>
+          <tr><td class="sub">MME-VLA†</td><td class="txt">uniform frames</td><td class="no">✗</td><td>65.2</td><td>25.1</td><td>36.3</td><td>51.4</td><td>44.5</td></tr>
+          <tr><td class="sub">MME-VLA‡</td><td class="txt">uniform frames</td><td class="no">✗</td><td class="second">68.5</td><td>25.0</td><td>36.7</td><td>49.5</td><td>44.9<span class="sd"> ± 0.9</span></td></tr>
+          <tr><td class="sub">MME-VLA∗</td><td class="txt">uniform frames</td><td class="no">✗</td><td>68.0</td><td>27.2</td><td>34.7</td><td class="second">52.8</td><td class="second">45.7<span class="sd"> ± 0.6</span></td></tr>
+          <tr class="ours"><td class="sub">LATCH (ours)</td><td class="txt">gated uniform frames</td><td class="no">✗</td><td class="best">69.8</td><td class="second">28.2</td><td class="second">37.3</td><td class="best">53.7</td><td class="best">47.2<span class="sd"> ± 0.9</span></td></tr>
+          <tr class="group"><td colspan="8">GR00T N1.6 backbone</td></tr>
+          <tr><td>GR00T N1.6</td><td class="txt">none</td><td class="no">✗</td><td>15.2</td><td>7.7</td><td>11.2</td><td>4.8</td><td>9.7<span class="sd"> ± 0.4</span></td></tr>
+          <tr><td class="sub">HAMLET</td><td class="txt">moment tokens</td><td class="no">✗</td><td>21.3</td><td>17.8</td><td class="second">16.0</td><td>9.5</td><td>16.2<span class="sd"> ± 0.2</span></td></tr>
+          <tr><td class="sub">MME-VLA</td><td class="txt">uniform frames</td><td class="no">✗</td><td class="second">34.2</td><td class="second">19.0</td><td class="second">16.0</td><td class="best">16.7</td><td class="second">21.5<span class="sd"> ± 0.1</span></td></tr>
+          <tr class="ours"><td class="sub">LATCH (ours)</td><td class="txt">gated uniform frames</td><td class="no">✗</td><td class="best">38.0</td><td class="best">20.5</td><td class="best">19.3</td><td class="second">16.5</td><td class="best">23.6<span class="sd"> ± 0.6</span></td></tr>
+        </tbody>
+      </table>
+      <p class="tnote">† reported in RoboMME; ‡ the authors' released checkpoint evaluated in our harness; ∗ matched control:
+        the released checkpoint trained for the same 30k steps, schedule, batch size, and hardware as LATCH's gate phase,
+        without gates; unmarked rows are our training runs. Ours: mean of three evaluation seeds, ± std on Overall.
+        Annot.: training requires manual subtask or keyframe annotations. Bold / underline: best / second best per column
+        and backbone.</p>
+    </div>
+
+    <div class="tbl-wrap" id="t-rmbench" style="margin-top:22px">
+        <table>
+          <caption>RMBench (dual-arm): success rate (%) · reduced protocol, 10 of 100 episodes per task</caption>
+          <thead><tr><th>Method</th><th class="c">Annot.</th><th>M(1)</th><th>M(n)</th><th>All</th></tr></thead>
+          <tbody>
+            <tr><td>Mem-0</td><td class="yes">✓</td><td class="best">55.3<span class="sd"> ± 3.1</span></td><td>15.8<span class="sd"> ± 15.3</span></td><td class="best">37.8<span class="sd"> ± 6.8</span></td></tr>
+            <tr><td>π<sub>0.5</sub></td><td class="no">✗</td><td>14.7<span class="sd"> ± 7.0</span></td><td>5.0<span class="sd"> ± 5.0</span></td><td>10.4<span class="sd"> ± 6.1</span></td></tr>
+            <tr><td class="sub">HAMLET</td><td class="no">✗</td><td>21.3<span class="sd"> ± 4.2</span></td><td class="best">18.3<span class="sd"> ± 1.4</span></td><td>20.0<span class="sd"> ± 1.9</span></td></tr>
+            <tr><td class="sub">MME-VLA</td><td class="no">✗</td><td>35.3<span class="sd"> ± 2.3</span></td><td>13.3<span class="sd"> ± 8.0</span></td><td>25.6<span class="sd"> ± 4.8</span></td></tr>
+            <tr class="ours"><td class="sub">LATCH (ours)</td><td class="no">✗</td><td>50.7<span class="sd"> ± 4.6</span></td><td class="best">18.3<span class="sd"> ± 6.3</span></td><td>36.3<span class="sd"> ± 3.6</span></td></tr>
+          </tbody>
+        </table>
+        <p class="tnote"><b>Evaluation protocol:</b> full RMBench evaluation is slow, so every method is evaluated on the
+          <b>first 10 of the 100 official episodes per task (10%)</b>, with three seeds (30 episodes per task and method);
+          mean ± std over seeds. Training uses the full benchmark. Under this reduced protocol the benchmark authors' released
+          memory-free π<sub>0.5</sub> checkpoint reproduces its published result. With 10 episodes per task the study fixes the
+          direction of the ranking rather than its size. Five M(1) and four M(n) tasks. Mem-0 re-run in our harness; its
+          unreleased M(n) planner is retrained with the authors' recipe, so its M(n) score is a lower bound.</p>
+      </div>
+
+    <div class="tbl-wrap" id="t-libero">
+      <table>
+        <caption>LIBERO: success rate (%) per suite</caption>
+        <thead><tr><th>Policy</th><th>Spatial</th><th>Object</th><th>Goal</th><th>Long</th><th>Mean</th></tr></thead>
+        <tbody>
+          <tr><td>π<sub>0.5</sub></td><td>96.9<span class="sd"> ± 1.6</span></td><td>98.6<span class="sd"> ± 0.2</span></td><td>97.7<span class="sd"> ± 0.2</span></td><td>95.3<span class="sd"> ± 0.5</span></td><td>97.1<span class="sd"> ± 0.2</span></td></tr>
+          <tr><td class="sub">HAMLET</td><td>97.9<span class="sd"> ± 0.6</span></td><td>99.1<span class="sd"> ± 0.3</span></td><td>97.6<span class="sd"> ± 1.3</span></td><td>95.2<span class="sd"> ± 1.1</span></td><td>97.4<span class="sd"> ± 0.2</span></td></tr>
+          <tr><td class="sub">MME-VLA</td><td>97.5<span class="sd"> ± 0.5</span></td><td>98.3<span class="sd"> ± 0.6</span></td><td>97.5<span class="sd"> ± 0.6</span></td><td>95.7<span class="sd"> ± 1.6</span></td><td>97.3<span class="sd"> ± 0.6</span></td></tr>
+          <tr class="ours"><td class="sub">LATCH (ours)</td><td>98.1<span class="sd"> ± 1.1</span></td><td>98.5<span class="sd"> ± 0.8</span></td><td>96.9<span class="sd"> ± 2.9</span></td><td>94.4<span class="sd"> ± 0.8</span></td><td>97.0<span class="sd"> ± 0.5</span></td></tr>
+          <tr><td>GR00T N1.6</td><td>98.1<span class="sd"> ± 0.6</span></td><td>99.7<span class="sd"> ± 0.1</span></td><td>97.3<span class="sd"> ± 0.2</span></td><td>91.9<span class="sd"> ± 2.0</span></td><td>96.8<span class="sd"> ± 0.4</span></td></tr>
+          <tr><td class="sub">HAMLET</td><td>96.7<span class="sd"> ± 1.0</span></td><td>99.4<span class="sd"> ± 0.5</span></td><td>97.2<span class="sd"> ± 0.9</span></td><td>93.4<span class="sd"> ± 1.2</span></td><td>96.7<span class="sd"> ± 0.7</span></td></tr>
+          <tr><td class="sub">MME-VLA</td><td>96.8<span class="sd"> ± 0.6</span></td><td>98.5<span class="sd"> ± 0.7</span></td><td>96.3<span class="sd"> ± 0.1</span></td><td>92.9<span class="sd"> ± 0.7</span></td><td>96.2<span class="sd"> ± 0.3</span></td></tr>
+          <tr class="ours"><td class="sub">LATCH (ours)</td><td>94.7<span class="sd"> ± 0.8</span></td><td>99.4<span class="sd"> ± 0.0</span></td><td>96.2<span class="sd"> ± 0.7</span></td><td>92.2<span class="sd"> ± 2.3</span></td><td>95.6<span class="sd"> ± 0.7</span></td></tr>
+        </tbody>
+      </table>
+      <p class="tnote">10 tasks per suite, 50 initial states per task, mean ± std over three evaluation seeds; memory methods listed under
+        their backbone. LIBERO is largely Markovian and near saturation, so it checks that memory costs nothing on regular tasks.</p>
+    </div>
+
+
+  </section>
+
+  <!-- Real robot -->
+  <section class="card" id="real">
+    <h2>Real-Robot Rollouts</h2>
+    <div class="prose">
+      <p>We evaluate on a low-cost SO-101 arm with three tasks whose current frame does not reveal the task state: the
+        robot has to remember what it already did. All policies are π<sub>0.5</sub> models trained on the same
+        demonstrations of all three tasks. A trial counts only if its memory-dependent part is correct. All clips on this page
+        are unedited front-camera recordings of individual trials.</p>
+    </div>
+
+    <div class="tbl-wrap" id="t-count">
+      <table class="realtbl">
+        <caption>Real-world SO-101 results: successes over trials on the memory-dependent part</caption>
+        <thead><tr><th>Task</th><th>π<sub>0.5</sub></th><th>HAMLET</th><th>MME-VLA</th><th class="oc">LATCH (ours)</th></tr></thead>
+        <tbody>
+          <tr><td>Return Lego to original side</td><td>1/10</td><td>1/10</td><td>8/10</td><td class="oc">8/10</td></tr>
+          <tr><td>Swap Lego, starting with red</td><td>2/10</td><td>3/10</td><td>10/10</td><td class="oc">10/10</td></tr>
+          <tr class="rowtop"><td>Pick up Lego <i>N</i> times, exact</td><td>2/25</td><td>3/25</td><td>8/25</td><td class="oc best">13/25</td></tr>
+          <tr class="pern"><td class="sub">N = 1</td><td><span class="mk up" title="past N">↑</span><span class="mk fail" title="failed">✗</span><span class="mk up" title="past N">↑</span><span class="mk fail" title="failed">✗</span><span class="mk ok" title="exact">✓</span></td><td><span class="mk ok" title="exact">✓</span><span class="mk up" title="past N">↑</span><span class="mk ok" title="exact">✓</span><span class="mk up" title="past N">↑</span><span class="mk ok" title="exact">✓</span></td><td><span class="mk ok" title="exact">✓</span><span class="mk fail" title="failed">✗</span><span class="mk fail" title="failed">✗</span><span class="mk fail" title="failed">✗</span><span class="mk ok" title="exact">✓</span></td><td class="oc"><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span></td></tr>
+          <tr class="pern"><td class="sub">N = 2</td><td><span class="mk fail" title="failed">✗</span><span class="mk fail" title="failed">✗</span><span class="mk down" title="short">↓</span><span class="mk ok" title="exact">✓</span><span class="mk up" title="past N">↑</span></td><td><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk fail" title="failed">✗</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span></td><td><span class="mk fail" title="failed">✗</span><span class="mk fail" title="failed">✗</span><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span></td><td class="oc"><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span><span class="mk fail" title="failed">✗</span></td></tr>
+          <tr class="pern"><td class="sub">N = 3</td><td><span class="mk fail" title="failed">✗</span><span class="mk fail" title="failed">✗</span><span class="mk up" title="past N">↑</span><span class="mk down" title="short">↓</span><span class="mk fail" title="failed">✗</span></td><td><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk down" title="short">↓</span></td><td><span class="mk up" title="past N">↑</span><span class="mk fail" title="failed">✗</span><span class="mk up" title="past N">↑</span><span class="mk ok" title="exact">✓</span><span class="mk ok" title="exact">✓</span></td><td class="oc"><span class="mk ok" title="exact">✓</span><span class="mk up" title="past N">↑</span><span class="mk ok" title="exact">✓</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span></td></tr>
+          <tr class="pern"><td class="sub">N = 4</td><td><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk down" title="short">↓</span></td><td><span class="mk up" title="past N">↑</span><span class="mk fail" title="failed">✗</span><span class="mk fail" title="failed">✗</span><span class="mk down" title="short">↓</span><span class="mk up" title="past N">↑</span></td><td><span class="mk fail" title="failed">✗</span><span class="mk fail" title="failed">✗</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span></td><td class="oc"><span class="mk up" title="past N">↑</span><span class="mk fail" title="failed">✗</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span></td></tr>
+          <tr class="pern"><td class="sub">N = 5</td><td><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span></td><td><span class="mk up" title="past N">↑</span><span class="mk fail" title="failed">✗</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span></td><td><span class="mk down" title="short">↓</span><span class="mk down" title="short">↓</span><span class="mk down" title="short">↓</span><span class="mk ok" title="exact">✓</span><span class="mk down" title="short">↓</span></td><td class="oc"><span class="mk ok" title="exact">✓</span><span class="mk up" title="past N">↑</span><span class="mk ok" title="exact">✓</span><span class="mk up" title="past N">↑</span><span class="mk up" title="past N">↑</span></td></tr>
+        </tbody>
+      </table>
+      <p class="tnote">Pick-up rows show the five trials per <i>N</i> in the order run:
+        <span class="mk ok">✓</span> exact count · <span class="mk up">↑</span> picked past <i>N</i> ·
+        <span class="mk down">↓</span> stopped short · <span class="mk fail">✗</span> failed otherwise.
+        All four policies are π<sub>0.5</sub> models trained on the same 200 demonstrations of the three tasks.</p>
+    </div>
+
+    <figure class="fig narrow">
+      <img src="assets/img/setup.jpg" alt="Real-world setup: SO-101 arm, front camera on a tripod, wrist camera, 36 by 47 cm workspace." loading="lazy">
+      <figcaption>Setup: SO-101 arm, a fixed front camera and a wrist camera, 36 × 47 cm workspace.</figcaption>
+    </figure>
+
+    <figure class="fig narrow">
+      <img src="assets/img/tasks.jpg" alt="LATCH executing the three real-world tasks on the SO-101 arm: opposite and back, swap two cubes starting with the red one, pick up the Lego N times." loading="lazy">
+      <figcaption>The three memory-dependent tasks, executed by LATCH.</figcaption>
+    </figure>
+
+    <h3 class="subhead">Rollouts: π<sub>0.5</sub> failures vs. LATCH successes</h3>
+
+    <div class="task">
+      <h3>Swap Cubes</h3>
+      <p class="instr">“Swap the positions of two cubes, starting with the red one.”</p>
+      <p class="score">Success over 10 trials: π<sub>0.5</sub> 2 · HAMLET 3 · MME-VLA 10 · <b>LATCH 10</b></p>
+      <div class="vgrid" style="--cols:3">
+        <figure class="clip bad">
+          <video src="assets/videos/swap_pi05_2.mp4" poster="assets/videos/swap_pi05_2.jpg" muted loop playsinline preload="none" data-autoplay></video>
+          <figcaption><span class="who"><span>π<sub>0.5</sub></span> <span class="badge bad">Failure</span></span>
+            <span class="what">The swap is never completed. The cubes end where they started.</span></figcaption>
+        </figure>
+        <figure class="clip ok">
+          <video src="assets/videos/swap_latch_1.mp4" poster="assets/videos/swap_latch_1.jpg" muted loop playsinline preload="none" data-autoplay></video>
+          <figcaption><span class="who"><span>LATCH</span> <span class="badge ok">Success</span></span>
+            <span class="what">Red cube on the yellow plate at the start.</span></figcaption>
+        </figure>
+        <figure class="clip ok">
+          <video src="assets/videos/swap_latch_2.mp4" poster="assets/videos/swap_latch_2.jpg" muted loop playsinline preload="none" data-autoplay></video>
+          <figcaption><span class="who"><span>LATCH</span> <span class="badge ok">Success</span></span>
+            <span class="what">A second trial, again finishing and staying put.</span></figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="task">
+      <h3>Opposite and Back</h3>
+      <p class="instr">“Pick up the Lego and place it on the opposite side, and then return it to the original side.”</p>
+      <p class="score">Success over 10 trials: π<sub>0.5</sub> 1 · HAMLET 1 · MME-VLA 8 · <b>LATCH 8</b></p>
+      <div class="vgrid" style="--cols:3">
+        <figure class="clip bad">
+          <video src="assets/videos/opp_pi05_1.mp4" poster="assets/videos/opp_pi05_1.jpg" muted loop playsinline preload="none" data-autoplay></video>
+          <figcaption><span class="who"><span>π<sub>0.5</sub></span> <span class="badge bad">Failure</span></span>
+            <span class="what">Completes the round trip, then starts it again and leaves the Lego on the opposite side.</span></figcaption>
+        </figure>
+        <figure class="clip ok">
+          <video src="assets/videos/opp_latch_1.mp4" poster="assets/videos/opp_latch_1.jpg" muted loop playsinline preload="none" data-autoplay></video>
+          <figcaption><span class="who"><span>LATCH</span> <span class="badge ok">Success</span></span>
+            <span class="what">Blue → yellow → back to blue, then stops.</span></figcaption>
+        </figure>
+        <figure class="clip ok">
+          <video src="assets/videos/opp_latch_2.mp4" poster="assets/videos/opp_latch_2.jpg" muted loop playsinline preload="none" data-autoplay></video>
+          <figcaption><span class="who"><span>LATCH</span> <span class="badge ok">Success</span></span>
+            <span class="what">A second trial from the same start.</span></figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="task">
+      <h3>Pick Up <i>N</i> Times</h3>
+      <p class="instr">“Pick up the Lego 2 times.”</p>
+      <p class="score">Exact count over 25 trials (N = 1…5): π<sub>0.5</sub> 2 · HAMLET 3 · MME-VLA 8 · <b>LATCH 13</b></p>
+      <div class="vgrid" style="--cols:2">
+        <figure class="clip bad">
+          <video src="assets/videos/pick2_pi05_1.mp4" poster="assets/videos/pick2_pi05_1.jpg" muted loop playsinline preload="none" data-autoplay></video>
+          <figcaption><span class="who"><span>π<sub>0.5</sub></span> <span class="badge bad">Failure</span></span>
+            <span class="what">Loses the count and keeps picking well past two.</span></figcaption>
+        </figure>
+        <figure class="clip ok">
+          <video src="assets/videos/pick2_latch_1.mp4" poster="assets/videos/pick2_latch_1.jpg" muted loop playsinline preload="none" data-autoplay></video>
+          <figcaption><span class="who"><span>LATCH</span> <span class="badge ok">Success</span></span>
+            <span class="what">Two pick-ups, then returns to rest.</span></figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="browser" id="browse">
+      <h3>Browse every rollout</h3>
+      <p class="bnote">Every completed rollout we recorded, for all four models and all three tasks. Pick a task, then a model
+        and a rollout in each player to compare them side by side. Nothing is selected or edited, and per-clip outcomes
+        are not labelled. The folders also contain resets, restarts and repeated attempts, so they hold more rollouts
+        than the 10 / 10 / 25 scored trials per model. Front camera, in recording order.</p>
+
+      <div class="btabs" role="tablist" aria-label="Task">
+        <button class="btab" role="tab" data-task="swap">Swap Cubes</button>
+        <button class="btab" role="tab" data-task="opposite">Opposite and Back</button>
+        <button class="btab" role="tab" data-task="pickup">Pick Up <i>N</i> Times</button>
+        <label class="nsel" hidden>N =
+          <select id="bN"><option value="all">all</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+        </label>
+      </div>
+      <p class="instr" id="bInstr"></p>
+
+      <div class="players">
+        <div class="player" data-default="pi05">
+          <div class="pctl">
+            <select class="pm" aria-label="Model"></select>
+            <select class="pr" aria-label="Rollout"></select>
+          </div>
+          <video muted playsinline controls preload="metadata"></video>
+          <div class="pmeta"></div>
+        </div>
+        <div class="player" data-default="latch">
+          <div class="pctl">
+            <select class="pm" aria-label="Model"></select>
+            <select class="pr" aria-label="Rollout"></select>
+          </div>
+          <video muted playsinline controls preload="metadata"></video>
+          <div class="pmeta"></div>
+        </div>
+      </div>
+      <div class="bbar">
+        <button class="bbtn" id="bSync">▶ Play both from start</button>
+        <span class="bcount" id="bCount"></span>
+      </div>
+    </div>
+
+
+
+  </section>
+
+  <!-- BibTeX -->
+  <section class="card" id="bibtex">
+    <h2>BibTeX</h2>
+<pre class="bib">@article{latch2026,
+  title   = {{LATCH}: Action-Guided Perceptual Memory for Vision-Language-Action Models},
+  author  = {Anonymous Authors},
+  journal = {Under review},
+  year    = {2026}
+}</pre>
+  </section>
+
+</main>
+
+<footer>Anonymous project page for double-blind review.</footer>
+
+<script>
+  // RQ answers: expand/collapse all; evidence links open nothing extra.
+  (function () {
+    var btn = document.getElementById('rqToggle'); if (!btn) return;
+    var ds = document.querySelectorAll('ol.rqs details');
+    function sync() { var all = Array.prototype.every.call(ds, function (d) { return d.open; }); btn.textContent = all ? 'Collapse all' : 'Expand all'; }
+    btn.addEventListener('click', function () { var open = btn.textContent === 'Expand all'; ds.forEach(function (d) { d.open = open; }); sync(); });
+    ds.forEach(function (d) { d.addEventListener('toggle', sync); });
+  })();
+</script>
+<script src="banner_gates.js"></script>
+<script src="banner.js"></script>
+<script src="rollouts.js"></script>
+<script>
+  // Rollout browser: task tabs, optional N filter, two independent players (model + rollout).
+  (function () {
+    var R = window.ROLLOUTS; if (!R) return;
+    var MODELS = [['pi05', 'π0.5 (no memory)'], ['hamlet', 'HAMLET'], ['mmevla', 'MME-VLA'], ['latch', 'LATCH (ours)']];
+    var INSTR = {
+      swap: '“Swap the positions of two cubes, starting with the red one.”',
+      opposite: '“Pick up the Lego and place it on the opposite side, and then return it to the original side.”',
+      pickup: '“Pick up the Lego N times.”'
+    };
+    var root = document.getElementById('browse');
+    var tabs = root.querySelectorAll('.btab'), nWrap = root.querySelector('.nsel'), nSel = document.getElementById('bN');
+    var players = Array.prototype.slice.call(root.querySelectorAll('.player'));
+    var state = { task: 'swap' };
+
+    function list(model) {
+      var all = (R[state.task] || {})[model] || [];
+      var n = nSel.value;
+      return all.map(function (r, i) { return { r: r, i: i }; })
+                .filter(function (x) { return state.task !== 'pickup' || n === 'all' || String(x.r.n) === n; });
+    }
+    function fillRollouts(p, keepIdx) {
+      var items = list(p.m.value);
+      p.r.innerHTML = '';
+      items.forEach(function (x, k) {
+        var o = document.createElement('option');
+        o.value = x.i;
+        o.textContent = 'Rollout ' + (k + 1) + ' / ' + items.length + (x.r.n ? '  ·  N = ' + x.r.n : '') + '  ·  ' + x.r.d.toFixed(0) + ' s';
+        p.r.appendChild(o);
+      });
+      if (!items.length) { var o = document.createElement('option'); o.textContent = 'no rollouts'; p.r.appendChild(o); }
+      if (keepIdx != null && keepIdx < items.length) p.r.selectedIndex = keepIdx;
+      load(p);
+    }
+    function load(p) {
+      var all = (R[state.task] || {})[p.m.value] || [];
+      var rec = all[+p.r.value];
+      if (!rec) { p.v.removeAttribute('src'); p.v.load(); p.meta.textContent = ''; return; }
+      p.v.poster = rec.src + '.jpg';
+      p.v.src = rec.src + '.mp4';
+      p.meta.textContent = 'Recorded ' + rec.t + (rec.n ? '  ·  prompt N = ' + rec.n : '') + '  ·  ' + rec.d.toFixed(1) + ' s';
+    }
+    function count() {
+      var c = MODELS.map(function (m) { return m[1].replace(' (no memory)', '').replace(' (ours)', '') + ' ' + list(m[0]).length; });
+      document.getElementById('bCount').textContent = 'Rollouts shown: ' + c.join(' · ');
+    }
+    function setTask(t) {
+      state.task = t;
+      tabs.forEach(function (b) { b.setAttribute('aria-selected', b.dataset.task === t ? 'true' : 'false'); });
+      nWrap.hidden = t !== 'pickup';
+      document.getElementById('bInstr').textContent = INSTR[t];
+      players.forEach(function (p) { fillRollouts(p, 0); });
+      count();
+    }
+
+    players.forEach(function (el) {
+      var p = { el: el, m: el.querySelector('.pm'), r: el.querySelector('.pr'), v: el.querySelector('video'), meta: el.querySelector('.pmeta') };
+      MODELS.forEach(function (m) { var o = document.createElement('option'); o.value = m[0]; o.textContent = m[1]; p.m.appendChild(o); });
+      p.m.value = el.dataset.default;
+      p.m.addEventListener('change', function () { fillRollouts(p, 0); });
+      p.r.addEventListener('change', function () { load(p); p.v.play().catch(function () {}); });
+      players[players.indexOf(el)] = p;
+    });
+    tabs.forEach(function (b) { b.addEventListener('click', function () { setTask(b.dataset.task); }); });
+    nSel.addEventListener('change', function () { players.forEach(function (p) { fillRollouts(p, 0); }); count(); });
+    document.getElementById('bSync').addEventListener('click', function () {
+      players.forEach(function (p) { try { p.v.currentTime = 0; } catch (e) {} p.v.play().catch(function () {}); });
+    });
+    setTask('swap');
+  })();
+</script>
+<script>
+  // Play clips only while they are on screen; fall back to plain controls.
+  (function () {
+    var vids = document.querySelectorAll('video[data-autoplay]');
+    if (!('IntersectionObserver' in window)) {
+      vids.forEach(function (v) { v.controls = true; v.preload = 'metadata'; });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        var v = e.target;
+        if (e.isIntersecting) { var p = v.play(); if (p && p.catch) p.catch(function () { v.controls = true; }); }
+        else { v.pause(); }
+      });
+    }, { threshold: 0.25 });
+    vids.forEach(function (v) { io.observe(v); });
+  })();
+</script>
+</body>
+</html>
