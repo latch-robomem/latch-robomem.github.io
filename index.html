@@ -446,8 +446,8 @@
     </div>
 
     <div class="browser" id="browse">
-      <h3>Browse every rollout</h3>
-      <p class="bnote">All 243 completed rollouts of the four models, unedited and unlabelled (restarts included, so more clips than scored trials). Pick a task, then a model and a rollout in each player.</p>
+      <h3>Browse the scored trials</h3>
+      <p class="bnote">The 178 recorded trials behind the real-robot table, unedited: 10 per model for Swap Cubes and Opposite and Back, 25 for Pick Up <i>N</i> Times (5 per <i>N</i>), in run order. Restarts and set-up runs are left out. Two trials have no video (one MME-VLA swap trial was not recorded, one HAMLET swap recording is corrupt). Pick a task, then a model and a trial in each player.</p>
 
       <div class="btabs" role="tablist" aria-label="Task">
         <button class="btab" role="tab" data-task="swap">Swap Cubes</button>
@@ -542,7 +542,7 @@
       items.forEach(function (x, k) {
         var o = document.createElement('option');
         o.value = x.i;
-        o.textContent = 'Rollout ' + (k + 1) + ' / ' + items.length + (x.r.n ? '  ·  N = ' + x.r.n : '') + '  ·  ' + x.r.d.toFixed(0) + ' s';
+        o.textContent = 'Trial ' + (k + 1) + ' / ' + items.length + (x.r.n ? '  ·  N = ' + x.r.n : '') + '  ·  ' + x.r.d.toFixed(0) + ' s';
         p.r.appendChild(o);
       });
       if (!items.length) { var o = document.createElement('option'); o.textContent = 'no rollouts'; p.r.appendChild(o); }
@@ -559,7 +559,7 @@
     }
     function count() {
       var c = MODELS.map(function (m) { return m[1].replace(' (no memory)', '').replace(' (ours)', '') + ' ' + list(m[0]).length; });
-      document.getElementById('bCount').textContent = 'Rollouts shown: ' + c.join(' · ');
+      document.getElementById('bCount').textContent = 'Trials shown: ' + c.join(' · ');
     }
     function setTask(t) {
       state.task = t;
