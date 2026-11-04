@@ -391,7 +391,7 @@
         <figure class="clip bad">
           <video src="assets/videos/swap_pi05_2.mp4" poster="assets/videos/swap_pi05_2.jpg" muted loop playsinline preload="none" data-autoplay></video>
           <figcaption><span class="who"><span>π<sub>0.5</sub></span> <span class="badge bad">Failure</span></span>
-            <span class="what">The swap is never completed. The cubes end where they started.</span></figcaption>
+            <span class="what">Lifts the red cube and sets it back on its own plate several times, then carries it onto the occupied yellow plate. The swap is never done.</span></figcaption>
         </figure>
         <figure class="clip ok">
           <video src="assets/videos/swap_latch_1.mp4" poster="assets/videos/swap_latch_1.jpg" muted loop playsinline preload="none" data-autoplay></video>
@@ -447,7 +447,7 @@
 
     <div class="browser" id="browse">
       <h3>Browse the scored trials</h3>
-      <p class="bnote">The 178 recorded trials behind the real-robot table, unedited: 10 per model for Swap Cubes and Opposite and Back, 25 for Pick Up <i>N</i> Times (5 per <i>N</i>), in run order. Restarts and set-up runs are left out. Two trials have no video (one MME-VLA swap trial was not recorded, one HAMLET swap recording is corrupt). Pick a task, then a model and a trial in each player.</p>
+      <p class="bnote">The 178 recorded trials behind the real-robot table, unedited: 10 per model for Swap Cubes and Opposite and Back, 25 for Pick Up <i>N</i> Times (5 per <i>N</i>), in run order. Restarts and set-up runs are left out. One MME-VLA swap trial was not recorded, so that list shows 9 of 10. Pick a task, then a model and a trial in each player.</p>
 
       <div class="btabs" role="tablist" aria-label="Task">
         <button class="btab" role="tab" data-task="swap">Swap Cubes</button>
@@ -536,16 +536,20 @@
       return all.map(function (r, i) { return { r: r, i: i }; })
                 .filter(function (x) { return state.task !== 'pickup' || n === 'all' || String(x.r.n) === n; });
     }
+    function total() { return state.task !== 'pickup' ? 10 : (nSel.value === 'all' ? 25 : 5); }   // trials per model in the table
     function fillRollouts(p, keepIdx) {
-      var items = list(p.m.value);
+      var items = list(p.m.value), tot = total();
       p.r.innerHTML = '';
       items.forEach(function (x, k) {
         var o = document.createElement('option');
         o.value = x.i;
-        o.textContent = 'Trial ' + (k + 1) + ' / ' + items.length + (x.r.n ? '  ·  N = ' + x.r.n : '') + '  ·  ' + x.r.d.toFixed(0) + ' s';
+        o.textContent = 'Trial ' + (k + 1) + ' / ' + tot + (x.r.n ? '  ·  N = ' + x.r.n : '') + '  ·  ' + x.r.d.toFixed(0) + ' s';
         p.r.appendChild(o);
       });
-      if (!items.length) { var o = document.createElement('option'); o.textContent = 'no rollouts'; p.r.appendChild(o); }
+      for (var k = items.length; k < tot; k++) {   // trial in the table without a recording
+        var o = document.createElement('option'); o.disabled = true;
+        o.textContent = 'Trial ' + (k + 1) + ' / ' + tot + '  ·  not recorded'; p.r.appendChild(o);
+      }
       if (keepIdx != null && keepIdx < items.length) p.r.selectedIndex = keepIdx;
       load(p);
     }
@@ -558,8 +562,8 @@
       p.meta.textContent = 'Recorded ' + rec.t + (rec.n ? '  ·  prompt N = ' + rec.n : '') + '  ·  ' + rec.d.toFixed(1) + ' s';
     }
     function count() {
-      var c = MODELS.map(function (m) { return m[1].replace(' (no memory)', '').replace(' (ours)', '') + ' ' + list(m[0]).length; });
-      document.getElementById('bCount').textContent = 'Trials shown: ' + c.join(' · ');
+      var c = MODELS.map(function (m) { return m[1].replace(' (no memory)', '').replace(' (ours)', '') + ' ' + list(m[0]).length + '/' + total(); });
+      document.getElementById('bCount').textContent = 'Trials with video: ' + c.join(' · ');
     }
     function setTask(t) {
       state.task = t;
